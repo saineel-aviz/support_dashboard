@@ -296,7 +296,6 @@ const HVLINECOL: Record<string, string> = {
   Wistron: C.dark,
   "(none)": C.grey,
 };
-const grid = "rgba(0,0,0,0.06)";
 const SUMMARY_KEY = "ebayDashboardSummary";
 
 function toast(msg: string) {
