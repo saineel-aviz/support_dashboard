@@ -160,6 +160,37 @@ function extractPriorityLabel(work: Record<string, unknown>): string {
   return pretty || "(none)";
 }
 
+function extractSolvedDate(work: Record<string, unknown>): string | null {
+  const stock =
+    str(work.actual_close_date) ||
+    str(work.closed_date) ||
+    str(work.resolved_date) ||
+    nestStr(work, "actual_close_date") ||
+    null;
+  if (stock) return stock;
+
+  const fromCustom =
+    pickCustom(work, [
+      "tnt__solved_date",
+      "solved_date",
+      "solved date",
+      "resolution_date",
+      "resolved_date",
+      "closed_date",
+      "actual_close",
+    ]) || null;
+  if (fromCustom && /^\d{4}-\d{2}/.test(fromCustom)) return fromCustom;
+
+  // Direct key lookup for tenant custom fields DevRev often returns as tnt__*
+  const fields = customFields(work);
+  for (const key of Object.keys(fields)) {
+    if (!/solved_date|resolved_date|closed_date|actual_close/i.test(key)) continue;
+    const v = stringifyCustom(fields[key]);
+    if (v && /^\d{4}-\d{2}/.test(v)) return v;
+  }
+  return null;
+}
+
 export function mapWorkToTicket(work: unknown, closedStageIds: string[]): DashboardTicket | null {
   const rec = asRecord(work);
   if (!rec) return null;
@@ -172,12 +203,15 @@ export function mapWorkToTicket(work: unknown, closedStageIds: string[]): Dashbo
   const stage = extractStage(rec);
   const severity = normalizeSeverity(str(rec.severity) || nestStr(rec, "severity", "value"));
   const createdDate = str(rec.created_date);
-  const actualCloseDate = str(rec.actual_close_date);
+  const actualCloseDate = extractSolvedDate(rec);
   const modifiedDate = str(rec.modified_date);
-  const state = (str(rec.state) || "").toLowerCase();
-  const closedByStage = closedStageIds.includes(stage.key);
-  const closedByName = /^(solved|resolved|closed)$/i.test(stage.name);
-  const isOpen = !(closedByStage || closedByName || state === "closed" || Boolean(actualCloseDate));
+
+  // Match reference HTML: Solved/Resolved = configured closed stage ids (44, 19) or those names.
+  const isSolvedStage =
+    closedStageIds.includes(stage.key) || /^(solved|resolved)$/i.test(stage.name);
+  const stageState = asRecord(asRecord(rec.stage)?.state);
+  const finalState = Boolean(stageState?.is_final) && /^(solved|resolved|closed)$/i.test(str(stageState?.name) || "");
+  const isOpen = !(isSolvedStage || finalState);
 
   const ownerName = extractOwner(rec);
   const supportLevel = normalizeSupportLevel(pickCustom(rec, ["support_level", "support level", "escalation"]));
@@ -199,6 +233,7 @@ export function mapWorkToTicket(work: unknown, closedStageIds: string[]): Dashbo
     modifiedDate,
     lastCommentDate: null,
     isOpen,
+    isSolvedStage,
     supportLevel,
     hardwareVendor,
     ownerName,

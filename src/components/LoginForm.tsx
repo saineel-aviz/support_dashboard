@@ -33,12 +33,17 @@ export function LoginForm() {
   }
 
   return (
-    <div className="login-page">
-      <form className="login-card" onSubmit={onSubmit}>
+    <div className="flex min-h-dvh items-center justify-center p-4 sm:p-6">
+      <form
+        className="flex w-full max-w-[400px] flex-col gap-2.5 rounded-2xl border border-line bg-surface p-6 sm:p-8"
+        onSubmit={onSubmit}
+      >
         <p className="eyebrow">Product support · Admin</p>
-        <h1>Sign in</h1>
-        <p className="login-copy">Enter the shared dashboard password.</p>
-        <label htmlFor="password">Password</label>
+        <h1 className="text-2xl font-semibold sm:text-[28px]">Sign in</h1>
+        <p className="mb-2 text-sm text-muted">Enter the shared dashboard password.</p>
+        <label htmlFor="password" className="font-mono-ui text-[11px] uppercase tracking-[0.05em] text-subtle">
+          Password
+        </label>
         <input
           id="password"
           type="password"
@@ -46,9 +51,10 @@ export function LoginForm() {
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           required
+          className="rounded-[10px] border-[1.5px] border-line px-3 py-2.5 text-[15px] outline-none focus:border-ink"
         />
-        {error ? <p className="login-error">{error}</p> : null}
-        <button type="submit" className="reset" disabled={busy}>
+        {error ? <p className="text-[13px] text-red">{error}</p> : null}
+        <button type="submit" className="btn-outline mt-2" disabled={busy}>
           {busy ? "Signing in…" : "Continue"}
         </button>
       </form>
