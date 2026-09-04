@@ -32,7 +32,7 @@ export function fillBucketRange(labels: string[], bucket: TimeBucket, maxPoints 
   const out: string[] = [];
 
   if (bucket === "week") {
-    let cur = new Date(start + "T00:00:00Z");
+    const cur = new Date(start + "T00:00:00Z");
     const last = new Date(end + "T00:00:00Z");
     while (cur <= last) {
       out.push(cur.toISOString().slice(0, 10));
