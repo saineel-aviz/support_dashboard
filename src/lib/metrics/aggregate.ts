@@ -20,7 +20,10 @@ export function filterTickets(
 ): DashboardTicket[] {
   return tickets.filter((t) => {
     if (opts?.openOnly && !t.isOpen) return false;
-    if (f.product && t.product !== f.product) return false;
+    if (f.product) {
+      const want = f.product === "__untyped__" ? "" : f.product;
+      if (t.product !== want) return false;
+    }
     if (f.stage && t.stageKey !== f.stage) return false;
     if (f.severity && t.severity !== f.severity) return false;
     if (f.year) {
@@ -32,8 +35,8 @@ export function filterTickets(
 }
 
 export function closedInSprint(t: DashboardTicket): string | null {
-  if (t.isOpen) return null;
-  return sprintLabelFromIso(t.actualCloseDate || t.modifiedDate);
+  if (!t.isSolvedStage || !t.actualCloseDate) return null;
+  return sprintLabelFromIso(t.actualCloseDate);
 }
 
 export function createdInSprint(t: DashboardTicket): string | null {

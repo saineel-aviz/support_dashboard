@@ -11,11 +11,14 @@ export type DashboardTicket = {
   stageName: string;
   severity: Severity;
   createdDate: string | null;
+  /** Date ticket reached Solved/Resolved (custom solved_date / actual_close). */
   actualCloseDate: string | null;
   modifiedDate: string | null;
   /** Last customer/agent timeline comment; null = none. Used for idle. */
   lastCommentDate: string | null;
   isOpen: boolean;
+  /** True when current stage is Solved (44) or Resolved (19). */
+  isSolvedStage: boolean;
   supportLevel: string;
   hardwareVendor: string;
   ownerName: string;
