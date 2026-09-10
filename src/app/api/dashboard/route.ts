@@ -5,13 +5,11 @@ import { mapWorkToTicket } from "@/lib/devrev/map-ticket";
 import type { DashboardPayload, DashboardTicket } from "@/lib/dashboard/types";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 export const maxDuration = 120;
 
-export async function GET(
-  _request: Request,
-  context: { params: Promise<{ vendor: string }> },
-) {
-  const { vendor: slug } = await context.params;
+export async function GET(request: Request) {
+  const slug = new URL(request.url).searchParams.get("vendor") || "";
   const vendor = getVendor(slug);
   if (!vendor) {
     return NextResponse.json({ error: "Unknown vendor" }, { status: 404 });

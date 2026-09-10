@@ -1,4 +1,11 @@
-export type VendorSlug = "ebay";
+export type VendorSlug = "ebay" | "walmart";
+
+/** How the "created by support level" chart is drawn. */
+export type SupportLevelChartMode =
+  /** Aviz (non-L3) + one line per hardware vendor for L3 tickets. */
+  | "ebay-split"
+  /** Two lines: Vendor (= L3) and Aviz (= everything else). */
+  | "aviz-vendor";
 
 export type VendorConfig = {
   slug: VendorSlug;
@@ -8,6 +15,9 @@ export type VendorConfig = {
   closedStageIds: string[];
   idleDays: number;
   idle15Days: number;
+  supportLevelChart: SupportLevelChartMode;
+  /** Stage keys treated as "pending on customer". */
+  pendingCustomerStageIds: string[];
 };
 
 export const STAGE_LABELS: Record<string, string> = {
@@ -46,6 +56,19 @@ export const vendors: Record<VendorSlug, VendorConfig> = {
     closedStageIds: ["44", "19"],
     idleDays: 3,
     idle15Days: 15,
+    supportLevelChart: "ebay-split",
+    pendingCustomerStageIds: ["45", "20"],
+  },
+  walmart: {
+    slug: "walmart",
+    name: "Walmart",
+    envAccountIdsKey: "DEVREV_WALMART_ACCOUNT_IDS",
+    productLabels: PRODUCT_LABELS,
+    closedStageIds: ["44", "19"],
+    idleDays: 3,
+    idle15Days: 15,
+    supportLevelChart: "aviz-vendor",
+    pendingCustomerStageIds: ["45", "20"],
   },
 };
 
