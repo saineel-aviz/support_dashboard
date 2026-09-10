@@ -106,7 +106,19 @@ function pickCustom(work: Record<string, unknown>, needles: string[]): string | 
   return null;
 }
 
-const HW_VENDORS = ["Arista", "Aviz", "Celestica", "Cisco", "Dell", "Edgecore", "Nvidia", "Wistron"];
+const HW_VENDORS = [
+  "Arista",
+  "Aviz",
+  "Celestica",
+  "Cisco",
+  "Dell",
+  "Edgecore",
+  "Nvidia",
+  "Wistron",
+  "Micas",
+  "Supermicro",
+  "UfiSpace",
+];
 
 function normalizeSupportLevel(raw: string | null): string {
   if (!raw) return "(none)";
@@ -115,15 +127,40 @@ function normalizeSupportLevel(raw: string | null): string {
   if (/l3\s*internal/i.test(v)) return "L3 Internal";
   if (/^l1$/i.test(v)) return "L1";
   if (/^l2$/i.test(v)) return "L2";
-  if (/none|unset|n\/a/i.test(v)) return "(none)";
+  if (/none|unset|n\/a|untagged/i.test(v)) return "(none)";
   return v;
 }
 
+/** Match known OEMs only — matches HTML LVL_VENDOR / HV_TICKETS allowlist. */
+function matchKnownHwVendor(text: string): string | null {
+  const lower = text.toLowerCase();
+  if (/\bnvidia\b/.test(lower)) return "Nvidia";
+  for (const name of HW_VENDORS) {
+    if (name === "Nvidia") continue;
+    if (lower.includes(name.toLowerCase())) return name;
+  }
+  // Common Edgecore model prefixes in titles
+  if (/\b(as|ec)\s?-?\s?\d{4}\b/i.test(text) || /\bec\s?\d{4}\b/i.test(text)) return "Edgecore";
+  if (/\bes\s?-?\s?1227\b/i.test(text) || /\b6512\b/.test(text) || /\b3200\b/.test(text)) {
+    // ambiguous — only if wistron-ish context
+    if (/wistron|es1227|6512/i.test(text)) return "Wistron";
+  }
+  return null;
+}
+
 function extractHardwareVendor(work: Record<string, unknown>, title: string): string {
-  const fromField = pickCustom(work, ["hardware_vendor", "hw_vendor", "hardware vendor", "oem", "vendor"]);
+  // Prefer explicit hardware/OEM fields — never a bare "vendor" key (picks up junk / titles).
+  const fromField = pickCustom(work, ["hardware_vendor", "hw_vendor", "hardware vendor", "hw vendor", "oem"]);
   if (fromField) {
-    const named = HW_VENDORS.find((n) => fromField.toLowerCase().includes(n.toLowerCase()));
-    return named || fromField;
+    const named = matchKnownHwVendor(fromField);
+    if (named) return named;
+    // Short curated value that isn't an RMA/title blob → Other (HTML uses "Other")
+    if (
+      fromField.length <= 40 &&
+      !/rma|#\d+|tkt-|svc\d+|\[ebay\]|\[walmart\]|need rma|device /i.test(fromField)
+    ) {
+      return "Other";
+    }
   }
   const tags = work.tags;
   if (Array.isArray(tags)) {
@@ -131,12 +168,11 @@ function extractHardwareVendor(work: Record<string, unknown>, title: string): st
       const rec = asRecord(tag);
       const name = nestStr(asRecord(rec?.tag), "name") || stringifyCustom(tag);
       if (!name) continue;
-      const named = HW_VENDORS.find((n) => name.toLowerCase().includes(n.toLowerCase()));
+      const named = matchKnownHwVendor(name);
       if (named) return named;
     }
   }
-  const named = HW_VENDORS.find((n) => title.toLowerCase().includes(n.toLowerCase()));
-  return named || "(none)";
+  return matchKnownHwVendor(title) || "(none)";
 }
 
 function extractOwner(work: Record<string, unknown>): string {

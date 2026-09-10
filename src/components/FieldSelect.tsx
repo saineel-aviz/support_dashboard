@@ -31,11 +31,33 @@ export function FieldSelect({
 
   useEffect(() => {
     if (!open) return;
+
+    const scrollY = window.scrollY;
+    const { style } = document.body;
+    const prev = {
+      overflow: style.overflow,
+      position: style.position,
+      top: style.top,
+      width: style.width,
+    };
+    // Lock scroll so the sheet stays glued to the viewport (not the page end).
+    style.overflow = "hidden";
+    style.position = "fixed";
+    style.top = `-${scrollY}px`;
+    style.width = "100%";
+
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") setOpen(false);
     }
     document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    return () => {
+      style.overflow = prev.overflow;
+      style.position = prev.position;
+      style.top = prev.top;
+      style.width = prev.width;
+      window.scrollTo(0, scrollY);
+      document.removeEventListener("keydown", onKey);
+    };
   }, [open]);
 
   return (
@@ -59,7 +81,7 @@ export function FieldSelect({
 
       {open && mounted
         ? createPortal(
-            <div className="field-menu-layer">
+            <div className="field-menu-layer" role="presentation">
               <button
                 type="button"
                 className="field-menu-backdrop"
@@ -95,10 +117,10 @@ export function FieldSelect({
                           setOpen(false);
                         }}
                       >
-                        <span className="field-menu-check" aria-hidden="true">
-                          {isOn ? "✓" : ""}
+                        <span className={`field-menu-check ${isOn ? "" : "is-empty"}`} aria-hidden="true">
+                          ✓
                         </span>
-                        <span className="min-w-0 flex-1 text-left">{opt.label}</span>
+                        <span className="field-menu-label">{opt.label}</span>
                       </button>
                     );
                   })}

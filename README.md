@@ -42,4 +42,4 @@ npm run dev
 3. Add the same environment variables as `.env.example` in **Project → Settings → Environment Variables** (Production and Preview).
 4. Deploy. Share the Vercel URL and `DASHBOARD_PASSWORD` internally.
 
-The DevRev token stays on the server (`/api/dashboard/[vendor]`). The browser never sees `DEVREV_PAT`.
+The DevRev token stays on the server (`/api/dashboard?vendor=…`). The browser never sees `DEVREV_PAT`.
