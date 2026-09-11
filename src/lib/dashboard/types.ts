@@ -21,6 +21,10 @@ export type DashboardTicket = {
   isSolvedStage: boolean;
   supportLevel: string;
   hardwareVendor: string;
+  /** Hardware model / SKU (AS9716, Wistron ES1227, …). */
+  modelSku: string;
+  /** NOS / software image family (Edgecore-SONiC, Celestica 4.0.15, …). */
+  software: string;
   ownerName: string;
   priorityLabel: string;
 };
