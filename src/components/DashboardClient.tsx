@@ -1,13 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import {
   Chart,
-  DoughnutController,
   BarController,
   LineController,
-  ArcElement,
   BarElement,
   CategoryScale,
   LinearScale,
@@ -24,22 +22,26 @@ import {
 import { productLabel, vendorList, type VendorConfig } from "@/config/vendors";
 import type { DashboardFilter, DashboardPayload, DashboardTicket, TimeBucket } from "@/lib/dashboard/types";
 import {
-  buildEngineerMatrix,
+  buildEngineerMatrixFromBins,
   copyFor,
   isPendingCustomer,
-  isRmaTicket,
-  matrixPeriodLabel,
 } from "@/lib/dashboard/extras";
 import { allProductKeys, filterTickets, stageDisplay } from "@/lib/metrics/aggregate";
 import { bucketLabel, fillBucketRange, inBucket } from "@/lib/metrics/buckets";
+import {
+  type DateRange,
+  type RangePreset,
+  autoGranularity,
+  binDefs,
+  inDateRange,
+} from "@/lib/metrics/range";
 import { daysSince } from "@/lib/metrics/sprints";
+import { CreationTrends } from "@/components/CreationTrends";
 import { FieldSelect } from "@/components/FieldSelect";
 
 Chart.register(
-  DoughnutController,
   BarController,
   LineController,
-  ArcElement,
   BarElement,
   CategoryScale,
   LinearScale,
@@ -116,7 +118,7 @@ const valueLabels: Plugin = {
 };
 Chart.register(valueLabels);
 
-type ChartId = "created" | "createdSev" | "createdLvl" | "createdHv" | "solved" | "cvs" | "idle15" | "pc" | "rma";
+type ChartId = "idle15" | "pc";
 
 function LabelsToggle({ show, onToggle }: { show: boolean; onToggle: () => void }) {
   return (
@@ -284,43 +286,6 @@ const LVLLABEL: Record<string, string> = {
   "L3 Internal": "L3 Internal",
   "(none)": "(none)",
 };
-const SEVERITIES = ["blocker", "high", "medium", "low"] as const;
-const SEVLINECOL: Record<string, string> = {
-  blocker: C.red,
-  high: C.orange,
-  medium: C.blue,
-  low: C.green,
-};
-const HWVENDORS = [
-  "Arista",
-  "Aviz",
-  "Celestica",
-  "Cisco",
-  "Dell",
-  "Edgecore",
-  "Nvidia",
-  "Wistron",
-  "Micas",
-  "Supermicro",
-  "UfiSpace",
-  "Other",
-  "(none)",
-];
-const HVLINECOL: Record<string, string> = {
-  Arista: C.red,
-  Aviz: C.y,
-  Celestica: C.purple,
-  Cisco: C.blue,
-  Dell: C.blueL,
-  Edgecore: C.orange,
-  Nvidia: C.green,
-  Wistron: C.dark,
-  Micas: "#22b8a6",
-  Supermicro: "#e0620d",
-  UfiSpace: "#f5b301",
-  Other: C.grey,
-  "(none)": C.grey,
-};
 function toast(msg: string) {
   let t = document.getElementById("__toast");
   if (!t) {
@@ -397,29 +362,13 @@ export function DashboardClient({ vendor }: { vendor: VendorConfig }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<DashboardFilter>({ year: "", product: "", stage: "", severity: "" });
-  const [hvLevel, setHvLevel] = useState("L3");
-  const [hvSev, setHvSev] = useState("");
-  const [createdBucket, setCreatedBucket] = useState<TimeBucket>("month");
-  const [createdSevBucket, setCreatedSevBucket] = useState<TimeBucket>("month");
-  const [createdLvlBucket, setCreatedLvlBucket] = useState<TimeBucket>("month");
-  const [createdHvBucket, setCreatedHvBucket] = useState<TimeBucket>("month");
-  const [solvedBucket, setSolvedBucket] = useState<TimeBucket>("month");
-  const [cvsBucket, setCvsBucket] = useState<TimeBucket>("month");
-  const [wlBucket, setWlBucket] = useState<TimeBucket>("month");
-  const [cwlBucket, setCwlBucket] = useState<TimeBucket>("month");
+  const [trendRange, setTrendRange] = useState<DateRange>({ from: null, to: null });
+  const [trendPreset, setTrendPreset] = useState<RangePreset | null>("all");
   const [pcBucket, setPcBucket] = useState<TimeBucket>("month");
-  const [rmaBucket, setRmaBucket] = useState<TimeBucket>("month");
   const [idleChartDays, setIdleChartDays] = useState(vendor.idle15Days);
   const [labelVisibility, setLabelVisibility] = useState<Record<ChartId, boolean>>({
-    created: true,
-    createdSev: true,
-    createdLvl: true,
-    createdHv: true,
-    solved: true,
-    cvs: true,
     idle15: true,
     pc: true,
-    rma: true,
   });
   const [drill, setDrill] = useState<{ title: string; tickets: DashboardTicket[] } | null>(null);
   const [now, setNow] = useState(() => new Date());
@@ -427,15 +376,8 @@ export function DashboardClient({ vendor }: { vendor: VendorConfig }) {
   const [summaryStatus, setSummaryStatus] = useState("");
 
   const charts = useRef<Record<string, ChartType>>({});
-  const createdRef = useRef<HTMLCanvasElement>(null);
-  const createdSevRef = useRef<HTMLCanvasElement>(null);
-  const createdLvlRef = useRef<HTMLCanvasElement>(null);
-  const createdHvRef = useRef<HTMLCanvasElement>(null);
-  const solvedRef = useRef<HTMLCanvasElement>(null);
-  const cvsRef = useRef<HTMLCanvasElement>(null);
   const idle15Ref = useRef<HTMLCanvasElement>(null);
   const pcRef = useRef<HTMLCanvasElement>(null);
-  const rmaRef = useRef<HTMLCanvasElement>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -533,22 +475,16 @@ export function DashboardClient({ vendor }: { vendor: VendorConfig }) {
       return true;
     });
   }, [tickets, filter.product, filter.year]);
-  const solvedScoped = useMemo(() => {
+  const hvBase = useMemo(() => {
     return tickets.filter((t) => {
-      if (!t.isSolvedStage || !t.actualCloseDate) return false;
-      if (!productMatches(t.product, filter.product)) return false;
       if (filter.year) {
-        const y = new Date(t.actualCloseDate).getUTCFullYear();
+        const y = t.createdDate ? new Date(t.createdDate).getUTCFullYear() : null;
         if (y !== parseInt(filter.year, 10)) return false;
       }
       return true;
     });
-  }, [tickets, filter.product, filter.year]);
+  }, [tickets, filter.year]);
 
-  const idleOpen = useMemo(
-    () => scopedOpen.filter((t) => idleAge(t, now) >= vendor.idleDays),
-    [scopedOpen, now, vendor.idleDays],
-  );
   const idle15 = useMemo(
     () => scopedOpen.filter((t) => idleAge(t, now) >= vendor.idle15Days),
     [scopedOpen, now, vendor.idle15Days],
@@ -564,49 +500,44 @@ export function DashboardClient({ vendor }: { vendor: VendorConfig }) {
       return true;
     });
   }, [tickets, vendor, filter.product, filter.year]);
-  const rmaTickets = useMemo(() => {
-    return tickets.filter((t) => {
-      if (!isRmaTicket(t)) return false;
-      if (!productMatches(t.product, filter.product)) return false;
-      if (filter.year) {
-        const y = t.createdDate ? new Date(t.createdDate).getUTCFullYear() : null;
-        if (y !== parseInt(filter.year, 10)) return false;
-      }
-      return true;
-    });
-  }, [tickets, filter.product, filter.year]);
+  const todayIso = now.toISOString().slice(0, 10);
+  const trendGran = useMemo(() => autoGranularity(trendRange, "month"), [trendRange]);
+
   const resolvedMatrix = useMemo(() => {
     const list = tickets.filter((t) => {
       if (!t.isSolvedStage || !t.actualCloseDate) return false;
+      if (!inDateRange(t.actualCloseDate, trendRange)) return false;
       if (filter.year) {
         const y = new Date(t.actualCloseDate).getUTCFullYear();
         if (y !== parseInt(filter.year, 10)) return false;
       }
       return true;
     });
-    return buildEngineerMatrix(list, wlBucket, solvedDate);
-  }, [tickets, filter.year, wlBucket]);
+    const dates = list.map((t) => t.actualCloseDate);
+    const bins = binDefs(trendRange, trendGran, dates, todayIso);
+    return buildEngineerMatrixFromBins(list, bins, solvedDate);
+  }, [tickets, filter.year, trendRange, trendGran, todayIso]);
+
   const currentMatrix = useMemo(() => {
     const list = tickets.filter((t) => {
       if (!t.isOpen) return false;
+      if (!inDateRange(t.createdDate, trendRange)) return false;
       if (filter.year) {
         const y = t.createdDate ? new Date(t.createdDate).getUTCFullYear() : null;
         if (y !== parseInt(filter.year, 10)) return false;
       }
       return true;
     });
-    return buildEngineerMatrix(list, cwlBucket, (t) => t.createdDate);
-  }, [tickets, filter.year, cwlBucket]);
+    const dates = list.map((t) => t.createdDate);
+    const bins = binDefs(trendRange, trendGran, dates, todayIso);
+    return buildEngineerMatrixFromBins(list, bins, (t) => t.createdDate);
+  }, [tickets, filter.year, trendRange, trendGran, todayIso]);
   const blocked = useMemo(() => {
     const bySev = { blocker: 0, high: 1, medium: 2, low: 3 };
     return scopedOpen
       .filter((t) => t.severity === "blocker")
       .sort((a, b) => bySev[a.severity] - bySev[b.severity] || idleAge(b, now) - idleAge(a, now));
   }, [scopedOpen, now]);
-  const idle3Sorted = useMemo(() => {
-    const bySev = { blocker: 0, high: 1, medium: 2, low: 3 };
-    return [...idleOpen].sort((a, b) => bySev[a.severity] - bySev[b.severity] || idleAge(b, now) - idleAge(a, now));
-  }, [idleOpen, now]);
   const idle15Sorted = useMemo(() => {
     const bySev = { blocker: 0, high: 1, medium: 2, low: 3 };
     return [...idle15].sort((a, b) => bySev[a.severity] - bySev[b.severity] || idleAge(b, now) - idleAge(a, now));
@@ -614,40 +545,6 @@ export function DashboardClient({ vendor }: { vendor: VendorConfig }) {
 
   /** Point counts drive mobile chart min-width (horizontal scroll). */
   const chartPoints = useMemo(() => {
-    const labelsFor = (bucket: TimeBucket, list: DashboardTicket[]) => {
-      const set = new Set<string>();
-      list.forEach((t) => {
-        const lab = bucketLabel(t.createdDate, bucket);
-        if (lab) set.add(lab);
-      });
-      return fillBucketRange([...set], bucket).length;
-    };
-    const solvedLabelsFor = (bucket: TimeBucket, list: DashboardTicket[]) => {
-      const set = new Set<string>();
-      list.forEach((t) => {
-        const lab = bucketLabel(solvedDate(t), bucket);
-        if (lab) set.add(lab);
-      });
-      return fillBucketRange([...set], bucket).length;
-    };
-    const hvSource = tickets.filter((t) => {
-      if (filter.year) {
-        const y = t.createdDate ? new Date(t.createdDate).getUTCFullYear() : null;
-        if (y !== parseInt(filter.year, 10)) return false;
-      }
-      if (hvLevel && t.supportLevel !== hvLevel) return false;
-      if (hvSev && t.severity !== hvSev) return false;
-      return true;
-    });
-    const cvsSet = new Set<string>();
-    createdScoped.forEach((t) => {
-      const lab = bucketLabel(t.createdDate, cvsBucket);
-      if (lab) cvsSet.add(lab);
-    });
-    solvedScoped.forEach((t) => {
-      const lab = bucketLabel(solvedDate(t), cvsBucket);
-      if (lab) cvsSet.add(lab);
-    });
     const idleChartFiltered = scopedOpen.filter(
       (t) => idleAge(t, now) >= idleChartDays && (!filter.severity || t.severity === filter.severity),
     );
@@ -660,38 +557,10 @@ export function DashboardClient({ vendor }: { vendor: VendorConfig }) {
       return fillBucketRange([...set], bucket).length;
     };
     return {
-      created: labelsFor(createdBucket, createdScoped),
-      createdSev: labelsFor(createdSevBucket, createdScoped),
-      createdLvl: labelsFor(createdLvlBucket, createdScoped),
-      createdHv: labelsFor(createdHvBucket, hvSource),
-      solved: solvedLabelsFor(solvedBucket, solvedScoped),
-      cvs: fillBucketRange([...cvsSet], cvsBucket).length,
       idle15: new Set(idleChartFiltered.map((t) => t.stageKey)).size,
       pc: labelsForPending(pcBucket, pendingTickets),
-      rma: labelsForPending(rmaBucket, rmaTickets),
     };
-  }, [
-    tickets,
-    createdScoped,
-    solvedScoped,
-    scopedOpen,
-    pendingTickets,
-    rmaTickets,
-    filter.year,
-    filter.severity,
-    hvLevel,
-    hvSev,
-    createdBucket,
-    createdSevBucket,
-    createdLvlBucket,
-    createdHvBucket,
-    solvedBucket,
-    cvsBucket,
-    pcBucket,
-    rmaBucket,
-    idleChartDays,
-    now,
-  ]);
+  }, [scopedOpen, pendingTickets, filter.severity, pcBucket, idleChartDays, now]);
 
   const scopeText = [
     filter.year || "All years",
@@ -720,15 +589,6 @@ export function DashboardClient({ vendor }: { vendor: VendorConfig }) {
     return list.filter((t) => inBucket(t.createdDate, bucket, label) && (!extra || extra(t)));
   }
 
-  function ticketsSolvedInBucket(
-    list: DashboardTicket[],
-    bucket: TimeBucket,
-    label: string,
-    extra?: (t: DashboardTicket) => boolean,
-  ) {
-    return list.filter((t) => inBucket(solvedDate(t), bucket, label) && (!extra || extra(t)));
-  }
-
   useEffect(() => {
     const labelsFor = (bucket: TimeBucket, list: DashboardTicket[]) => {
       const set = new Set<string>();
@@ -738,418 +598,6 @@ export function DashboardClient({ vendor }: { vendor: VendorConfig }) {
       });
       return fillBucketRange([...set], bucket);
     };
-    const solvedLabelsFor = (bucket: TimeBucket, list: DashboardTicket[]) => {
-      const set = new Set<string>();
-      list.forEach((t) => {
-        const lab = bucketLabel(solvedDate(t), bucket);
-        if (lab) set.add(lab);
-      });
-      return fillBucketRange([...set], bucket);
-    };
-
-    const createdLabels = labelsFor(createdBucket, createdScoped);
-    const createdCounts = createdLabels.map((lab) => ticketsInBucket(createdScoped, createdBucket, lab).length);
-    const createdPts = linePointStyle(createdLabels.length);
-    mk("created", createdRef.current, {
-      type: "line",
-      data: {
-        labels: displayLabels(createdLabels, createdBucket),
-        datasets: [
-          {
-            label: "Tickets created",
-            data: createdCounts,
-            borderColor: C.blue,
-            backgroundColor: "rgba(57,104,246,0.10)",
-            fill: true,
-            tension: 0.35,
-            ...createdPts,
-            pointBackgroundColor: C.blue,
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        layout: chartLayout,
-        interaction: { mode: "index", intersect: false },
-        onClick: (_e: unknown, els: ActiveElement[]) => {
-          if (!els.length) return;
-          const lab = createdLabels[els[0].index];
-          const bits = [`Created ${lab}`];
-          if (filter.product) bits.push(productFilterLabel(filter.product, vendor.productLabels));
-          openDrill(`${bits.join(" · ")} — tickets`, ticketsInBucket(createdScoped, createdBucket, lab));
-        },
-        plugins: {
-          legend: { display: false },
-          title: chartTitle(
-            `${createdCounts.reduce((s, n) => s + n, 0).toLocaleString()} tickets created (${createdBucket}ly) · click a point to list all tickets`,
-          ),
-          valueLabels: { enabled: labelVisibility.created },
-        },
-        scales: { x: xScaleOptions(createdLabels.length), y: yScaleOptions() },
-      },
-    });
-
-    const sevLabels = labelsFor(createdSevBucket, createdScoped);
-    const sevPts = linePointStyle(sevLabels.length);
-    mk("createdSev", createdSevRef.current, {
-      type: "line",
-      data: {
-        labels: displayLabels(sevLabels, createdSevBucket),
-        datasets: SEVERITIES.map((s) => ({
-          label: s[0].toUpperCase() + s.slice(1),
-          data: sevLabels.map((lab) => ticketsInBucket(createdScoped, createdSevBucket, lab, (t) => t.severity === s).length),
-          borderColor: SEVLINECOL[s],
-          backgroundColor: "transparent",
-          fill: false,
-          tension: 0.35,
-          ...sevPts,
-          pointBackgroundColor: SEVLINECOL[s],
-        })),
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        layout: chartLayout,
-        interaction: { mode: "index", intersect: false },
-        onClick: (_e: unknown, els: ActiveElement[]) => {
-          if (!els.length) return;
-          const lab = sevLabels[els[0].index];
-          const sev = SEVERITIES[els[0].datasetIndex];
-          openDrill(
-            `Created ${lab} · Severity: ${sev} — tickets`,
-            ticketsInBucket(createdScoped, createdSevBucket, lab, (t) => t.severity === sev),
-          );
-        },
-        plugins: {
-          legend: { position: "top", labels: { boxWidth: 10, boxHeight: 10, padding: 10, font: { size: 11 } } },
-          valueLabels: { enabled: labelVisibility.createdSev },
-        },
-        scales: { x: xScaleOptions(sevLabels.length), y: yScaleOptions() },
-      },
-    });
-
-    const lvlLabels = labelsFor(createdLvlBucket, createdScoped);
-    const lvlPts = linePointStyle(lvlLabels.length);
-    let lvlDatasets: {
-      label: string;
-      data: number[];
-      borderColor: string;
-      backgroundColor: string;
-      fill: boolean;
-      tension: number;
-      pointRadius: number;
-      pointHoverRadius: number;
-      borderWidth: number;
-      pointBackgroundColor: string;
-    }[] = [];
-    let lvlClick: (els: ActiveElement[]) => void = () => undefined;
-
-    if (vendor.supportLevelChart === "ebay-split") {
-      // Match HTML LVL_VENDOR: Aviz (non-L3) + one line per known HW vendor for L3 only.
-      const known = new Set(HWVENDORS);
-      const hvOf = (t: { hardwareVendor: string }) => {
-        const v = t.hardwareVendor || "(none)";
-        return known.has(v) ? v : "Other";
-      };
-      const l3Tickets = createdScoped.filter((t) => t.supportLevel === "L3");
-      const vendorTot: Record<string, number> = {};
-      l3Tickets.forEach((t) => {
-        const v = hvOf(t);
-        vendorTot[v] = (vendorTot[v] || 0) + 1;
-      });
-      const vendorsOrdered = Object.keys(vendorTot).sort((a, b) => vendorTot[b] - vendorTot[a] || a.localeCompare(b));
-      lvlDatasets = [
-        {
-          label: "Aviz (non-L3)",
-          data: lvlLabels.map(
-            (lab) => ticketsInBucket(createdScoped, createdLvlBucket, lab, (t) => t.supportLevel !== "L3").length,
-          ),
-          borderColor: C.blue,
-          backgroundColor: "transparent",
-          fill: false,
-          tension: 0.35,
-          ...lvlPts,
-          pointBackgroundColor: C.blue,
-        },
-        ...vendorsOrdered.map((v) => ({
-          label: `Vendor: ${v === "(none)" ? "untagged" : v}`,
-          data: lvlLabels.map(
-            (lab) =>
-              ticketsInBucket(
-                createdScoped,
-                createdLvlBucket,
-                lab,
-                (t) => t.supportLevel === "L3" && hvOf(t) === v,
-              ).length,
-          ),
-          borderColor: HVLINECOL[v] || C.grey,
-          backgroundColor: "transparent",
-          fill: false,
-          tension: 0.35,
-          ...lvlPts,
-          pointBackgroundColor: HVLINECOL[v] || C.grey,
-        })),
-      ];
-      lvlClick = (els) => {
-        if (!els.length) return;
-        const lab = lvlLabels[els[0].index];
-        const di = els[0].datasetIndex;
-        if (di === 0) {
-          openDrill(
-            `Created ${lab} · Aviz (L1/L2/L3 Internal) — tickets`,
-            ticketsInBucket(createdScoped, createdLvlBucket, lab, (t) => t.supportLevel !== "L3"),
-          );
-        } else {
-          const v = vendorsOrdered[di - 1];
-          openDrill(
-            `Created ${lab} · Vendor (L3) · ${v === "(none)" ? "untagged" : v} — tickets`,
-            ticketsInBucket(
-              createdScoped,
-              createdLvlBucket,
-              lab,
-              (t) => t.supportLevel === "L3" && hvOf(t) === v,
-            ),
-          );
-        }
-      };
-    } else {
-      lvlDatasets = [
-        {
-          label: "Vendor",
-          data: lvlLabels.map(
-            (lab) => ticketsInBucket(createdScoped, createdLvlBucket, lab, (t) => t.supportLevel === "L3").length,
-          ),
-          borderColor: C.orange,
-          backgroundColor: "transparent",
-          fill: false,
-          tension: 0.35,
-          ...lvlPts,
-          pointBackgroundColor: C.orange,
-        },
-        {
-          label: "Aviz",
-          data: lvlLabels.map(
-            (lab) => ticketsInBucket(createdScoped, createdLvlBucket, lab, (t) => t.supportLevel !== "L3").length,
-          ),
-          borderColor: C.blue,
-          backgroundColor: "transparent",
-          fill: false,
-          tension: 0.35,
-          ...lvlPts,
-          pointBackgroundColor: C.blue,
-        },
-      ];
-      lvlClick = (els) => {
-        if (!els.length) return;
-        const lab = lvlLabels[els[0].index];
-        if (els[0].datasetIndex === 0) {
-          openDrill(
-            `Created ${lab} · Vendor (L3) — tickets`,
-            ticketsInBucket(createdScoped, createdLvlBucket, lab, (t) => t.supportLevel === "L3"),
-          );
-        } else {
-          openDrill(
-            `Created ${lab} · Aviz (non-L3) — tickets`,
-            ticketsInBucket(createdScoped, createdLvlBucket, lab, (t) => t.supportLevel !== "L3"),
-          );
-        }
-      };
-    }
-
-    mk("createdLvl", createdLvlRef.current, {
-      type: "line",
-      data: {
-        labels: displayLabels(lvlLabels, createdLvlBucket),
-        datasets: lvlDatasets,
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        layout: chartLayout,
-        interaction: { mode: "index", intersect: false },
-        onClick: (_e: unknown, els: ActiveElement[]) => lvlClick(els),
-        plugins: {
-          legend: { position: "top", labels: { boxWidth: 10, boxHeight: 10, padding: 10, font: { size: 11 } } },
-          valueLabels: { enabled: labelVisibility.createdLvl },
-        },
-        scales: { x: xScaleOptions(lvlLabels.length), y: yScaleOptions() },
-      },
-    });
-
-    const hvSource = tickets.filter((t) => {
-      if (filter.year) {
-        const y = t.createdDate ? new Date(t.createdDate).getUTCFullYear() : null;
-        if (y !== parseInt(filter.year, 10)) return false;
-      }
-      if (hvLevel && t.supportLevel !== hvLevel) return false;
-      if (hvSev && t.severity !== hvSev) return false;
-      return true;
-    });
-    const hvLabels = labelsFor(createdHvBucket, hvSource);
-    const vendorsSeen = [...new Set([...HWVENDORS, ...hvSource.map((t) => t.hardwareVendor || "(none)")])];
-    const hvOrder = HWVENDORS.filter((v) => vendorsSeen.includes(v)).concat(
-      vendorsSeen.filter((v) => !HWVENDORS.includes(v)),
-    );
-    let tagged = 0;
-    hvSource.forEach((t) => {
-      if (t.hardwareVendor && t.hardwareVendor !== "(none)") tagged += 1;
-    });
-    const hvScopeTxt = [hvSev ? hvSev[0].toUpperCase() + hvSev.slice(1) : null, hvLevel ? LVLLABEL[hvLevel] || hvLevel : null]
-      .filter(Boolean)
-      .join(" · ");
-    const hvScopePfx = hvScopeTxt ? `${hvScopeTxt} · ` : "";
-    const hvPts = linePointStyle(hvLabels.length);
-    mk("createdHv", createdHvRef.current, {
-      type: "line",
-      data: {
-        labels: displayLabels(hvLabels, createdHvBucket),
-        datasets: hvOrder.map((v) => ({
-          label: v,
-          data: hvLabels.map((lab) => ticketsInBucket(hvSource, createdHvBucket, lab, (t) => (t.hardwareVendor || "(none)") === v).length),
-          borderColor: HVLINECOL[v] || C.grey,
-          backgroundColor: "transparent",
-          fill: false,
-          tension: 0.35,
-          ...hvPts,
-          pointBackgroundColor: HVLINECOL[v] || C.grey,
-        })),
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        layout: chartLayout,
-        interaction: { mode: "index", intersect: false },
-        onClick: (_e: unknown, els: ActiveElement[]) => {
-          if (!els.length) return;
-          const lab = hvLabels[els[0].index];
-          const hv = hvOrder[els[0].datasetIndex];
-          const bits = [`Created ${lab}`, `Vendor: ${hv}`];
-          if (hvSev) bits.push(`Severity: ${hvSev}`);
-          if (hvLevel) bits.push(`Support level: ${LVLLABEL[hvLevel] || hvLevel}`);
-          openDrill(
-            `${bits.join(" · ")} — tickets`,
-            ticketsInBucket(hvSource, createdHvBucket, lab, (t) => (t.hardwareVendor || "(none)") === hv),
-          );
-        },
-        plugins: {
-          legend: { position: "top", labels: { boxWidth: 10, boxHeight: 10, padding: 10, font: { size: 11 } } },
-          title: chartTitle(
-            `${tagged.toLocaleString()} tickets with a hardware vendor tagged (${hvScopePfx}${createdHvBucket}ly) · click a point to list them`,
-          ),
-          valueLabels: { enabled: labelVisibility.createdHv },
-        },
-        scales: { x: xScaleOptions(hvLabels.length), y: yScaleOptions() },
-      },
-    });
-
-    const solvedLabels = solvedLabelsFor(solvedBucket, solvedScoped);
-    const solvedCounts = solvedLabels.map((lab) => ticketsSolvedInBucket(solvedScoped, solvedBucket, lab).length);
-    const solvedTotal = solvedCounts.reduce((s, n) => s + n, 0);
-    const solvedPts = linePointStyle(solvedLabels.length);
-    mk("solved", solvedRef.current, {
-      type: "line",
-      data: {
-        labels: displayLabels(solvedLabels, solvedBucket),
-        datasets: [
-          {
-            label: "Tickets solved",
-            data: solvedCounts,
-            borderColor: C.green,
-            backgroundColor: "rgba(122,219,18,0.10)",
-            fill: true,
-            tension: 0.35,
-            ...solvedPts,
-            pointBackgroundColor: C.green,
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        layout: chartLayout,
-        interaction: { mode: "index", intersect: false },
-        onClick: (_e: unknown, els: ActiveElement[]) => {
-          if (!els.length) return;
-          const lab = solvedLabels[els[0].index];
-          const bits = [`Solved ${lab}`];
-          if (filter.product) bits.push(productFilterLabel(filter.product, vendor.productLabels));
-          openDrill(`${bits.join(" · ")} — tickets`, ticketsSolvedInBucket(solvedScoped, solvedBucket, lab));
-        },
-        plugins: {
-          legend: { display: false },
-          title: chartTitle(`${solvedTotal.toLocaleString()} tickets solved (${solvedBucket}ly) · click a point to list them`),
-          valueLabels: { enabled: labelVisibility.solved },
-        },
-        scales: { x: xScaleOptions(solvedLabels.length), y: yScaleOptions() },
-      },
-    });
-
-    const cvsLabels = fillBucketRange(
-      [...new Set([...labelsFor(cvsBucket, createdScoped), ...solvedLabelsFor(cvsBucket, solvedScoped)])],
-      cvsBucket,
-    );
-    const cvsCreatedCounts = cvsLabels.map((lab) => ticketsInBucket(createdScoped, cvsBucket, lab).length);
-    const cvsSolvedCounts = cvsLabels.map((lab) => ticketsSolvedInBucket(solvedScoped, cvsBucket, lab).length);
-    const cvsCreatedTotal = cvsCreatedCounts.reduce((s, n) => s + n, 0);
-    const cvsSolvedTotal = cvsSolvedCounts.reduce((s, n) => s + n, 0);
-    const net = cvsCreatedTotal - cvsSolvedTotal;
-    const cvsPts = linePointStyle(cvsLabels.length);
-    mk("cvs", cvsRef.current, {
-      type: "line",
-      data: {
-        labels: displayLabels(cvsLabels, cvsBucket),
-        datasets: [
-          {
-            label: "Created",
-            data: cvsCreatedCounts,
-            borderColor: C.blue,
-            backgroundColor: "rgba(57,104,246,0.08)",
-            fill: true,
-            tension: 0.35,
-            ...cvsPts,
-            pointBackgroundColor: C.blue,
-          },
-          {
-            label: "Solved",
-            data: cvsSolvedCounts,
-            borderColor: C.green,
-            backgroundColor: "rgba(122,219,18,0.08)",
-            fill: true,
-            tension: 0.35,
-            ...cvsPts,
-            pointBackgroundColor: C.green,
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        layout: chartLayout,
-        interaction: { mode: "index", intersect: false },
-        onClick: (_e: unknown, els: ActiveElement[]) => {
-          if (!els.length) return;
-          const lab = cvsLabels[els[0].index];
-          if (els[0].datasetIndex === 1) {
-            const bits = [`Solved ${lab}`];
-            if (filter.product) bits.push(productFilterLabel(filter.product, vendor.productLabels));
-            openDrill(`${bits.join(" · ")} — tickets`, ticketsSolvedInBucket(solvedScoped, cvsBucket, lab));
-          } else {
-            const bits = [`Created ${lab}`];
-            if (filter.product) bits.push(productFilterLabel(filter.product, vendor.productLabels));
-            openDrill(`${bits.join(" · ")} — tickets`, ticketsInBucket(createdScoped, cvsBucket, lab));
-          }
-        },
-        plugins: {
-          legend: { position: "top", labels: { boxWidth: 10, boxHeight: 10, padding: 10, font: { size: 11 } } },
-          title: chartTitle(
-            `${cvsCreatedTotal.toLocaleString()} created · ${cvsSolvedTotal.toLocaleString()} solved · net ${net >= 0 ? "+" : ""}${net.toLocaleString()} (${cvsBucket}ly)`,
-          ),
-          valueLabels: { enabled: labelVisibility.cvs },
-        },
-        scales: { x: xScaleOptions(cvsLabels.length), y: yScaleOptions() },
-      },
-    });
 
     const idleChartFiltered = scopedOpen.filter(
       (t) => idleAge(t, now) >= idleChartDays && (!filter.severity || t.severity === filter.severity),
@@ -1246,71 +694,11 @@ export function DashboardClient({ vendor }: { vendor: VendorConfig }) {
       },
     });
 
-    const rmaLabels = labelsFor(rmaBucket, rmaTickets);
-    const rmaCounts = rmaLabels.map((lab) => ticketsInBucket(rmaTickets, rmaBucket, lab).length);
-    const rmaPts = linePointStyle(rmaLabels.length);
-    mk("rma", rmaRef.current, {
-      type: "line",
-      data: {
-        labels: displayLabels(rmaLabels, rmaBucket),
-        datasets: [
-          {
-            label: "RMA tickets (by intake period)",
-            data: rmaCounts,
-            borderColor: C.purple,
-            backgroundColor: "rgba(136,84,246,0.12)",
-            fill: true,
-            tension: 0.35,
-            ...rmaPts,
-            pointBackgroundColor: C.purple,
-          },
-        ],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        layout: chartLayout,
-        interaction: { mode: "index", intersect: false },
-        onClick: (_e: unknown, els: ActiveElement[]) => {
-          if (!els.length) return;
-          const lab = rmaLabels[els[0].index];
-          openDrill(`RMA · ${lab} — tickets`, ticketsInBucket(rmaTickets, rmaBucket, lab));
-        },
-        plugins: {
-          legend: { display: false },
-          valueLabels: { enabled: labelVisibility.rma },
-        },
-        scales: { x: xScaleOptions(rmaLabels.length), y: yScaleOptions() },
-      },
-    });
-
     return () => {
       Object.values(charts.current).forEach((c) => c.destroy());
       charts.current = {};
     };
-  }, [
-    createdScoped,
-    solvedScoped,
-    tickets,
-    scopedOpen,
-    pendingTickets,
-    rmaTickets,
-    filter,
-    hvLevel,
-    hvSev,
-    createdBucket,
-    createdSevBucket,
-    createdLvlBucket,
-    createdHvBucket,
-    solvedBucket,
-    cvsBucket,
-    pcBucket,
-    rmaBucket,
-    idleChartDays,
-    labelVisibility,
-    vendor,
-    now,
-  ]);
+  }, [scopedOpen, pendingTickets, filter, pcBucket, idleChartDays, labelVisibility, vendor, now]);
 
   function toggleLabels(id: ChartId) {
     setLabelVisibility((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -1486,128 +874,34 @@ export function DashboardClient({ vendor }: { vendor: VendorConfig }) {
           />
         </div>
 
-        <div className="mb-2 mt-4 sm:mb-3 sm:mt-7">
-          <h2 className="text-base font-semibold sm:text-[26px]">Ticket creation trends</h2>
-          <p className="mt-1 hidden text-xs text-subtle sm:block sm:text-[13px]">
-            All tickets created (not just open), by time bucket. Responds to the Product filter. Click a point to list all tickets
-            created in that period (open &amp; solved).
-          </p>
-        </div>
-
-        <ChartCard
-          title="Tickets created"
-          subtitle="Count of tickets by creation date."
-          seg={<Seg value={createdBucket} onChange={setCreatedBucket} />}
-          canvasRef={createdRef}
-          tall
-          points={chartPoints.created}
-          showLabels={labelVisibility.created}
-          onToggleLabels={() => toggleLabels("created")}
-        />
-        <ChartCard
-          title="Tickets created by severity"
-          subtitle="One line per severity · click a point to list all tickets (open &amp; solved)."
-          seg={<Seg value={createdSevBucket} onChange={setCreatedSevBucket} />}
-          canvasRef={createdSevRef}
-          tall
-          points={chartPoints.createdSev}
-          showLabels={labelVisibility.createdSev}
-          onToggleLabels={() => toggleLabels("createdSev")}
-        />
-        <ChartCard
-          title="Tickets created by support level"
-          subtitle={copy.createdLvl}
-          seg={<Seg value={createdLvlBucket} onChange={setCreatedLvlBucket} />}
-          canvasRef={createdLvlRef}
-          tall
-          points={chartPoints.createdLvl}
-          showLabels={labelVisibility.createdLvl}
-          onToggleLabels={() => toggleLabels("createdLvl")}
-        />
-
-        <div className="card-panel mb-3 sm:mb-5">
-          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
-            <div className="min-w-0">
-              <h3 className="card-title">Tickets created by hardware vendor</h3>
-              <p className="mt-0.5 text-xs text-subtle">{copy.createdHv}</p>
-            </div>
-              <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:flex-wrap sm:items-end">
-              <FieldSelect
-                label="Severity"
-                value={hvSev}
-                onChange={setHvSev}
-                options={[
-                  { value: "", label: "All severities" },
-                  { value: "blocker", label: "Blocker" },
-                  { value: "high", label: "High" },
-                  { value: "medium", label: "Medium" },
-                  { value: "low", label: "Low" },
-                ]}
-              />
-              <FieldSelect
-                label="Support level"
-                value={hvLevel}
-                onChange={setHvLevel}
-                options={[
-                  { value: "", label: "All levels" },
-                  { value: "L1", label: "L1" },
-                  { value: "L2", label: "L2" },
-                  { value: "L3", label: "Vendor" },
-                  { value: "L3 Internal", label: "L3 Internal" },
-                  { value: "(none)", label: "(none)" },
-                ]}
-              />
-              <div className="flex items-center gap-2">
-                <LabelsToggle show={labelVisibility.createdHv} onToggle={() => toggleLabels("createdHv")} />
-                <Seg value={createdHvBucket} onChange={setCreatedHvBucket} />
-              </div>
-            </div>
-          </div>
-          <ChartScrollFrame points={chartPoints.createdHv} tall>
-            <canvas ref={createdHvRef} />
-          </ChartScrollFrame>
-        </div>
-
-        <ChartCard
-          title="Tickets solved"
-          subtitle={copy.solved}
-          seg={<Seg value={solvedBucket} onChange={setSolvedBucket} />}
-          canvasRef={solvedRef}
-          tall
-          points={chartPoints.solved}
-          showLabels={labelVisibility.solved}
-          onToggleLabels={() => toggleLabels("solved")}
-        />
-        <ChartCard
-          title="Tickets created vs solved"
-          subtitle={copy.cvs}
-          seg={<Seg value={cvsBucket} onChange={setCvsBucket} />}
-          canvasRef={cvsRef}
-          tall
-          points={chartPoints.cvs}
-          showLabels={labelVisibility.cvs}
-          onToggleLabels={() => toggleLabels("cvs")}
+        <CreationTrends
+          vendor={vendor}
+          tickets={createdScoped}
+          hvTickets={hvBase}
+          copy={copy}
+          openDrill={openDrill}
+          todayIso={todayIso}
+          range={trendRange}
+          preset={trendPreset}
+          onRangeChange={setTrendRange}
+          onPresetChange={setTrendPreset}
         />
 
         <div className="mb-2 mt-4 sm:mb-3 sm:mt-7">
           <h2 className="text-base font-semibold sm:text-[26px]">Support engineer workload</h2>
           <p className="mt-1 hidden text-xs text-subtle sm:block sm:text-[13px]">
-            Tickets resolved per engineer, and open tickets each engineer owns right now. Account-wide for {vendor.name} (product
-            filter ignored). Click any cell to list tickets.
+            Tickets resolved per engineer, and open tickets each engineer owns right now. Follows the time range above
+            ({trendGran}ly buckets). Account-wide for {vendor.name} (product filter ignored). Click any cell to list tickets.
           </p>
         </div>
 
         <div className="card-panel mb-3 sm:mb-5">
-          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div className="min-w-0">
-              <h3 className="card-title">Tickets resolved by engineer</h3>
-              <p className="mt-0.5 text-xs text-subtle">{copy.engResolved}</p>
-            </div>
-            <Seg value={wlBucket} onChange={setWlBucket} />
+          <div className="mb-4 min-w-0">
+            <h3 className="card-title">Tickets resolved by engineer</h3>
+            <p className="mt-0.5 text-xs text-subtle">{copy.engResolved}</p>
           </div>
           <WorkloadMatrix
             matrix={resolvedMatrix}
-            bucket={wlBucket}
             tintRgb="57,104,246"
             totalLabel="Total"
             onCellClick={(period, engineer) => {
@@ -1616,7 +910,7 @@ export function DashboardClient({ vendor }: { vendor: VendorConfig }) {
                   ? resolvedMatrix.periods.flatMap((p) => resolvedMatrix.cells[p]?.[engineer] || [])
                   : resolvedMatrix.cells[period]?.[engineer] || [];
               const bits = period
-                ? [`Resolved ${matrixPeriodLabel(wlBucket, period)}`, engineer]
+                ? [`Resolved ${resolvedMatrix.periodLabels[period] || period}`, engineer]
                 : [`Resolved (all periods)`, engineer];
               openDrill(`${bits.join(" · ")} — tickets`, rows);
             }}
@@ -1624,16 +918,12 @@ export function DashboardClient({ vendor }: { vendor: VendorConfig }) {
         </div>
 
         <div className="card-panel mb-3 sm:mb-5">
-          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div className="min-w-0">
-              <h3 className="card-title">Current workload by engineer</h3>
-              <p className="mt-0.5 text-xs text-subtle">{copy.engCurrent}</p>
-            </div>
-            <Seg value={cwlBucket} onChange={setCwlBucket} />
+          <div className="mb-4 min-w-0">
+            <h3 className="card-title">Current workload by engineer</h3>
+            <p className="mt-0.5 text-xs text-subtle">{copy.engCurrent}</p>
           </div>
           <WorkloadMatrix
             matrix={currentMatrix}
-            bucket={cwlBucket}
             tintRgb="255,137,58"
             totalLabel="Open total"
             onCellClick={(period, engineer) => {
@@ -1642,7 +932,7 @@ export function DashboardClient({ vendor }: { vendor: VendorConfig }) {
                   ? currentMatrix.periods.flatMap((p) => currentMatrix.cells[p]?.[engineer] || [])
                   : currentMatrix.cells[period]?.[engineer] || [];
               const bits = period
-                ? [`Open · created ${matrixPeriodLabel(cwlBucket, period)}`, engineer]
+                ? [`Open · created ${currentMatrix.periodLabels[period] || period}`, engineer]
                 : [`Open (all periods)`, engineer];
               openDrill(`${bits.join(" · ")} — tickets`, rows);
             }}
@@ -1682,39 +972,6 @@ export function DashboardClient({ vendor }: { vendor: VendorConfig }) {
             </div>
             <ChartScrollFrame points={chartPoints.pc}>
               <canvas ref={pcRef} />
-            </ChartScrollFrame>
-          </div>
-        </div>
-
-        <div className="mb-2 mt-4 sm:mb-3 sm:mt-7">
-          <h2 className="text-base font-semibold sm:text-[26px]">Tickets sent for RMA</h2>
-          <p className="mt-1 hidden text-xs text-subtle sm:block sm:text-[13px]">
-            {vendor.name} tickets whose title contains RMA. Click the total or any point to list them.
-          </p>
-        </div>
-
-        <div className="mb-3 grid gap-3 sm:mb-5 sm:gap-5 lg:grid-cols-2">
-          <div className="card-panel">
-            <h3 className="card-title">Overall RMA tickets</h3>
-            <p className="mt-0.5 text-xs text-subtle">{copy.rma}</p>
-            <button type="button" className="kpi-hit" onClick={() => openDrill("RMA tickets — all", rmaTickets)}>
-              <span className="kpi-num">{rmaTickets.length}</span>
-              <span className="text-xs text-subtle">tickets ↗</span>
-            </button>
-          </div>
-          <div className="card-panel">
-            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div className="min-w-0">
-                <h3 className="card-title">RMA tickets — trend</h3>
-                <p className="mt-0.5 text-xs text-subtle">{copy.rmaTrend}</p>
-              </div>
-              <div className="flex shrink-0 flex-wrap items-center gap-2">
-                <LabelsToggle show={labelVisibility.rma} onToggle={() => toggleLabels("rma")} />
-                <Seg value={rmaBucket} onChange={setRmaBucket} />
-              </div>
-            </div>
-            <ChartScrollFrame points={chartPoints.rma}>
-              <canvas ref={rmaRef} />
             </ChartScrollFrame>
           </div>
         </div>
@@ -1776,7 +1033,7 @@ export function DashboardClient({ vendor }: { vendor: VendorConfig }) {
         <div className="card-panel mb-3 overflow-hidden sm:mb-5">
           <div className="mb-3 flex flex-col gap-2.5 sm:mb-4 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
             <div className="min-w-0">
-              <h3 className="card-title">Open tickets with no activity in {idleChartDays}+ days — by stage</h3>
+              <h3 className="card-title">Open tickets with no activity — by stage</h3>
               <p className="mt-0.5 text-xs text-subtle">{copy.idle}</p>
             </div>
             <div className="flex shrink-0 flex-wrap items-center gap-2">
@@ -1797,7 +1054,6 @@ export function DashboardClient({ vendor }: { vendor: VendorConfig }) {
         </div>
 
         <ActionTable color={C.red} title="Blocked tickets" rows={blocked} now={now} vendor={vendor} />
-        <ActionTable color={C.orange} title={`No update in ${vendor.idleDays}+ days`} rows={idle3Sorted} now={now} vendor={vendor} />
         <ActionTable
           color={C.dark}
           title={`Idle ${vendor.idle15Days}+ days (no activity)`}
@@ -1811,7 +1067,7 @@ export function DashboardClient({ vendor }: { vendor: VendorConfig }) {
         <div className="wrap">
           <p className="font-mono-ui text-[10px] uppercase leading-relaxed tracking-[0.05em] sm:text-[11px]">
             {vendor.name} customer view · data refreshed {payload?.generatedAt ? new Date(payload.generatedAt).toUTCString() : "—"} ·
-            products = ticket subtypes · idle = no comment {vendor.idleDays}+ days · click chart points for tickets
+            products = ticket subtypes · idle = no comment {vendor.idleDays}+ / {vendor.idle15Days}+ days · time-range trends · click chart points for tickets
           </p>
         </div>
       </footer>
@@ -1819,60 +1075,20 @@ export function DashboardClient({ vendor }: { vendor: VendorConfig }) {
   );
 }
 
-function ChartCard({
-  title,
-  subtitle,
-  seg,
-  canvasRef,
-  tall,
-  points,
-  showLabels,
-  onToggleLabels,
-}: {
-  title: string;
-  subtitle: string;
-  seg: ReactNode;
-  canvasRef: RefObject<HTMLCanvasElement | null>;
-  tall?: boolean;
-  points: number;
-  showLabels: boolean;
-  onToggleLabels: () => void;
-}) {
-  return (
-    <div className="card-panel mb-3 overflow-hidden sm:mb-5">
-      <div className="mb-3 flex flex-col gap-2.5 sm:mb-4 sm:flex-row sm:items-start sm:justify-between sm:gap-3">
-        <div className="min-w-0">
-          <h3 className="card-title">{title}</h3>
-          <p className="mt-0.5 text-xs text-subtle">{subtitle}</p>
-        </div>
-        <div className="flex shrink-0 flex-wrap items-center gap-2">
-          <LabelsToggle show={showLabels} onToggle={onToggleLabels} />
-          {seg}
-        </div>
-      </div>
-      <ChartScrollFrame points={points} tall={tall}>
-        <canvas ref={canvasRef} />
-      </ChartScrollFrame>
-    </div>
-  );
-}
-
-type MatrixResult = ReturnType<typeof buildEngineerMatrix>;
+type MatrixResult = ReturnType<typeof buildEngineerMatrixFromBins>;
 
 function WorkloadMatrix({
   matrix,
-  bucket,
   tintRgb,
   totalLabel,
   onCellClick,
 }: {
   matrix: MatrixResult;
-  bucket: TimeBucket;
   tintRgb: string;
   totalLabel: string;
   onCellClick: (period: string | null, engineer: string) => void;
 }) {
-  const { periods, engineers, cells, rowTot, colTot, grand } = matrix;
+  const { periods, periodLabels, engineers, cells, rowTot, colTot, grand } = matrix;
   const maxCell = Math.max(
     1,
     ...periods.flatMap((p) => engineers.map((e) => cells[p]?.[e]?.length || 0)),
@@ -1889,7 +1105,7 @@ function WorkloadMatrix({
           <tr>
             <th>Engineer</th>
             {periods.map((p) => (
-              <th key={p}>{matrixPeriodLabel(bucket, p)}</th>
+              <th key={p}>{periodLabels[p] || p}</th>
             ))}
             <th>{totalLabel}</th>
           </tr>

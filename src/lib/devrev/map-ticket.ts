@@ -1,4 +1,5 @@
 import type { DashboardTicket } from "../dashboard/types";
+import { normalizeModelSku, normalizeSoftware } from "../dashboard/sku";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -253,6 +254,25 @@ export function mapWorkToTicket(work: unknown, closedStageIds: string[]): Dashbo
   const supportLevel = normalizeSupportLevel(pickCustom(rec, ["support_level", "support level", "escalation"]));
   const hardwareVendor = extractHardwareVendor(rec, title);
   const priorityLabel = extractPriorityLabel(rec);
+  const modelSku = normalizeModelSku(
+    pickCustom(rec, ["model_sku", "model sku", "sku", "hw_model", "hardware_model", "device_model", "platform_model", "model"]),
+    title,
+  );
+  const software = normalizeSoftware(
+    pickCustom(rec, [
+      "software",
+      "nos",
+      "nos_version",
+      "image_version",
+      "software_version",
+      "sonic_version",
+      "os_version",
+      "platform_software",
+      "image",
+      "build",
+    ]),
+    title,
+  );
 
   return {
     id,
@@ -272,6 +292,8 @@ export function mapWorkToTicket(work: unknown, closedStageIds: string[]): Dashbo
     isSolvedStage,
     supportLevel,
     hardwareVendor,
+    modelSku,
+    software,
     ownerName,
     priorityLabel,
   };
